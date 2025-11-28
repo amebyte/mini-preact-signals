@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Preact Signals</title>
+</head>
+<body>
+   <script>
+let currentSignal;
+let activating = false;
+const pending = new Set()
+let batchPending = 0 // 0 表示没有批处理正在进行
+class Signal {
+    _subs = new Set()
+    // _deps = new Set()
+    _value
+    _canActivate = false
+    constructor(value) {
+        this._value = value
+    }
+
+    get value() {
+        if (!currentSignal || activating) {
+            this._updater()
+        }
+        // console.log('currentSignal', currentSignal)
+        this._subs.add(currentSignal);
+		// currentSignal._deps.add(this);
+        // refreshStale(this)
+        return this._value
+    }
+
+    set value(value) {
+        if (this._value !== value) {
+            this._value = value
+            let isFirst = pending.size === 0;
+            console.log('set', batchPending, isFirst)
+            pending.add(this)
+			// sweep(this._subs)
+            if (isFirst && batchPending === 0) {
+                sweep(this._subs)
+            }
+        }
+    }
+
+    // _setCurrent() {
+    //     let prevSignal = currentSignal;
+    //     currentSignal = this;
+    //     return () => {
+    //         currentSignal = prevSignal;
+    //     }
+    // }
+
+    _updater() {
+        
+    }
+}
+
+// function activate(signal) {
+//     activating = true;
+//     try {
+//         refreshStale(signal);
+//     } finally {
+//         activating = false;
+//     }
+// }
+
+// function refreshStale(signal) {
+// 	signal._updater()
+// }
+
+function sweep(subs) {
+    // console.log('subs', subs.size)
+    subs.forEach(signal => {
+        // console.log('sweep forEach', signal)
+        signal._updater();
+        sweep(signal._subs);
+    })
+}
+
+// currentSignal = new Signal(undefined)
+// currentSignal._canActivate = true
+
+function signal(value) {
+    return new Signal(value)
+}
+
+function computed(compute) {
+    const signal = new Signal(undefined)
+    function updater() {
+        const tmp = currentSignal
+        currentSignal = signal
+        const ret = compute()
+        signal._value = ret
+        currentSignal = tmp
+    }
+    signal._updater = updater
+    return signal
+}
+
+function effect(callback) {
+    // const s = computed(() => callback())
+    const s = computed(() => batch(callback))
+    activating = true
+    s._updater()
+    activating = false
+}
+
+const a = signal('a')
+const b = signal('b')
+const c = computed(() => {
+    return a.value + b.value
+})
+// console.log('b.value1', b.value)
+// a.value = 'aa'
+// console.log('b.value2', b.value)
+effect(() => {
+    console.log('signals', c.value)
+})
+a.value = 'aa'
+// b.value = 'bb'
+
+// function updateTask1() {
+//     console.log('updateTask1')
+// }
+
+// function updateTask2() {
+//     console.log('updateTask2')
+// }
+// const pending1 = new Set()
+// function task1() {
+//     pending1.add(updateTask1)
+//     console.log('task1')
+// }
+
+// function task2() {
+//     pending1.add(updateTask2)
+//     console.log('task1')
+// }
+
+// task1()
+// task2()
+
+function batch(cb) {
+    // console.log('batch')
+    batchPending++;  // 进入批处理，增加计数器
+    // 防止用户代码报错，使用 try 语法
+    try {
+        cb()
+    } finally {
+        if (--batchPending === 0) {  // 退出最外层批处理
+            // pending.forEach(t => t())
+            console.log('pending', pending)
+            sweep(pending)
+        }
+    }
+}
+
+// batch(() => {
+//     task1()
+//     task2()
+//     batch(() => {
+//         task1()
+//         task2()
+//     })
+//     console.log('task3')
+// })
+
+   </script> 
+</body>
+</html>
