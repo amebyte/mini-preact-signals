@@ -14,6 +14,7 @@ let batchPending = 0 // 0 表示没有批处理正在进行
 class Signal {
     _subs = new Set()
     // _deps = new Set()
+    _pending = 0
     _value
     _canActivate = false
     constructor(value) {
@@ -37,6 +38,9 @@ class Signal {
             let isFirst = pending.size === 0;
             // console.log('set', batchPending, isFirst)
             pending.add(this)
+            if (this._pending === 0) {
+				mark(this);
+			}
 			// sweep(this._subs)
             // if (isFirst && batchPending === 0) {
             //     sweep(this._subs)
@@ -57,6 +61,12 @@ class Signal {
     }
 }
 
+function mark(signal) {
+	if (signal._pending++ === 0) {
+		signal._subs.forEach(mark);
+	}
+}
+
 // function activate(signal) {
 //     activating = true;
 //     try {
@@ -74,8 +84,12 @@ function sweep(subs) {
     // console.log('subs', subs.size)
     subs.forEach(signal => {
         // console.log('sweep forEach', signal)
-        signal._updater();
-        sweep(signal._subs);
+        if (signal._pending > 0) {
+            if (--signal._pending === 0) {
+                signal._updater()
+                sweep(signal._subs)
+            }
+        }
     })
 }
 
@@ -118,7 +132,6 @@ function batch(cb) {
             // pending.forEach(t => t())
             // console.log('pending', [...pending.values()])
             sweep(pending)
-            pending.clear()
         }
     }
 }

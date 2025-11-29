@@ -132,6 +132,7 @@ function batch(cb) {
             // pending.forEach(t => t())
             // console.log('pending', [...pending.values()])
             sweep(pending)
+            pending.clear()
         }
     }
 }
