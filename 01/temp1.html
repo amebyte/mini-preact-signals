@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Preact Signals</title>
+</head>
+<body>
+   <script>
+let currentSignal;
+let activating = false;
+// 将需要更新的任务集中存储起来
+const pending = new Set()
+let batchPending = 0 // 0 表示没有批处理正在进行
+class Signal {
+    _subs = new Set()
+    _pending = 0 // 更新标记计数器
+    _value
+    constructor(value) {
+        this._value = value
+    }
+
+    get value() {
+        if (!currentSignal || activating) {
+            this._updater()
+        }
+        // 依赖收集
+        this._subs.add(currentSignal)
+        return this._value
+    }
+
+    set value(value) {
+        if (this._value !== value) {
+            this._value = value
+            // 将需要更新的任务收集起来，等待最后再一起执行
+            pending.add(this)
+            // 只有当_pending为0时，才会标记订阅者，也就是标记过了，就不需要再标记，因为知道需要更新了
+            if (this._pending === 0) {
+				mark(this);
+			}
+        }
+    }
+
+    _updater() {
+        
+    }
+}
+
+// 递归地标记它的所有订阅者（即依赖此信号的其他信号）
+function mark(signal) {
+    // 注意，这里使用的是后自增，所以条件判断时是0，然后变成1
+	if (signal._pending++ === 0) {
+        // 递归地标记
+		signal._subs.forEach(mark);
+	}
+}
+
+function sweep(subs) {
+    subs.forEach(signal => {
+        // _pending > 0 意味着信号已经被标记过了，需要更新
+        if (signal._pending > 0) {
+            // 这里是重点，不管被标记了多次，都通过递减_pending直到0才执行更新
+            if (--signal._pending === 0) {
+                signal._updater()
+                sweep(signal._subs)
+            }
+        }
+    })
+}
+
+function signal(value) {
+    return new Signal(value)
+}
+
+function computed(compute) {
+    const signal = new Signal(undefined)
+    function updater() {
+        const tmp = currentSignal
+        currentSignal = signal
+        const ret = compute()
+        signal._value = ret
+        currentSignal = tmp
+    }
+    signal._updater = updater
+    return signal
+}
+
+function effect(callback) {
+    // 使用 batch 批量处理callback内部的多个信号更新
+    const s = computed(() => batch(callback))
+    activating = true
+    s._updater()
+    activating = false
+}
+
+function batch(cb) {
+    batchPending++;  // 进入批处理，增加计数器
+    // 防止用户代码报错，使用 try 语法
+    try {
+        cb()
+    } finally {
+        if (--batchPending === 0) {  // 退出最外层批处理
+            sweep(pending)
+            pending.clear() // 最后要清除所有的依赖
+        }
+    }
+}
+
+const a = signal('a')
+const b = signal('b')
+const c = computed(() => {
+    return a.value + b.value
+})
+effect(() => {
+    console.log('signals', c.value)
+    a.value = 'aa'
+    b.value = 'bb'
+})
+// batch(() => {
+//     a.value = 'aa'
+//     console.log('batch1')
+//     b.value = 'bb'
+//     console.log('batch2')
+// })
+
+   </script> 
+</body>
+</html>
