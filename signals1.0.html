@@ -316,10 +316,10 @@ const c = computed(() => {
 effect(() => {
     console.log('signals', c.value)
 })
-batch(() => {
+// batch(() => {
     a.value = 'aa'
     b.value = 'bb'
-})
+// })
 </script>  
 </body>
 </html>

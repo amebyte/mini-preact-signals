@@ -35,12 +35,12 @@ class Signal {
         if (this._value !== value) {
             this._value = value
             let isFirst = pending.size === 0;
-            console.log('set', batchPending, isFirst)
+            // console.log('set', batchPending, isFirst)
             pending.add(this)
 			// sweep(this._subs)
-            if (isFirst && batchPending === 0) {
-                sweep(this._subs)
-            }
+            // if (isFirst && batchPending === 0) {
+            //     sweep(this._subs)
+            // }
         }
     }
 
@@ -100,11 +100,26 @@ function computed(compute) {
 }
 
 function effect(callback) {
-    // const s = computed(() => callback())
-    const s = computed(() => batch(callback))
+    const s = computed(() => callback())
+    // const s = computed(() => batch(callback))
     activating = true
     s._updater()
     activating = false
+}
+
+function batch(cb) {
+    // console.log('batch')
+    batchPending++;  // 进入批处理，增加计数器
+    // 防止用户代码报错，使用 try 语法
+    try {
+        cb()
+    } finally {
+        if (--batchPending === 0) {  // 退出最外层批处理
+            // pending.forEach(t => t())
+            // console.log('pending', [...pending.values()])
+            sweep(pending)
+        }
+    }
 }
 
 const a = signal('a')
@@ -118,7 +133,10 @@ const c = computed(() => {
 effect(() => {
     console.log('signals', c.value)
 })
-a.value = 'aa'
+batch(() => {
+    a.value = 'aa'
+    b.value = 'bb'
+})
 // b.value = 'bb'
 
 // function updateTask1() {
@@ -141,21 +159,6 @@ a.value = 'aa'
 
 // task1()
 // task2()
-
-function batch(cb) {
-    // console.log('batch')
-    batchPending++;  // 进入批处理，增加计数器
-    // 防止用户代码报错，使用 try 语法
-    try {
-        cb()
-    } finally {
-        if (--batchPending === 0) {  // 退出最外层批处理
-            // pending.forEach(t => t())
-            console.log('pending', pending)
-            sweep(pending)
-        }
-    }
-}
 
 // batch(() => {
 //     task1()
