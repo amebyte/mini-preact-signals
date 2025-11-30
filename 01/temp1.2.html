@@ -29,6 +29,7 @@ class Signal {
         // 依赖收集
         this._subs.add(currentSignal)
         currentSignal._deps.add(this)
+        // 从上一轮收集到的依赖也就是 `oldDeps` 中删除当前读取到的信号，这样最后 `oldDeps` 中剩下的就是无效依赖，需要删除
         oldDeps.delete(this)
         return this._value
     }
@@ -47,6 +48,22 @@ class Signal {
                 sweep(pending)
                 pending.clear()
             }
+        }
+    }
+    // 创建一个计算上下文
+    _setCurrent() {
+        let prevSignal = currentSignal
+        let prevOldDeps = oldDeps
+        currentSignal = this
+        // 设置为当前信号的旧依赖集合（即上一次计算时依赖的信号）
+        oldDeps = this._deps
+        // 重置为一个新的空集合，以便在本次计算中重新收集依赖
+        this._deps = new Set()
+        return () => {
+            oldDeps.forEach(sub => unsubscribe(this, sub))
+            oldDeps.clear()
+			oldDeps = prevOldDeps
+            currentSignal = prevSignal
         }
     }
 
@@ -96,19 +113,10 @@ function signal(value) {
 function computed(compute) {
     const signal = new Signal(undefined)
     function updater() {
-        const tmp = currentSignal
-        currentSignal = signal
-        let prevOldDeps = oldDeps
-        // 设置为当前信号的旧依赖集合（即上一次计算时依赖的信号）
-        oldDeps = signal._deps
-        // 重置为一个新的空集合，以便在本次计算中重新收集依赖
-        signal._deps = new Set()
+        const finish = signal._setCurrent()
         const ret = compute()
         signal._value = ret
-        oldDeps.forEach(sub => unsubscribe(this, sub))
-        oldDeps.clear()
-        oldDeps = prevOldDeps
-        currentSignal = tmp
+        finish()
     }
     signal._updater = updater
     return signal

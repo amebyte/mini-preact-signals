@@ -29,6 +29,7 @@ class Signal {
         // 依赖收集
         this._subs.add(currentSignal)
         currentSignal._deps.add(this)
+        // 从上一轮收集到的依赖也就是 `oldDeps` 中删除当前读取到的信号，这样最后 `oldDeps` 中剩下的就是无效依赖，需要删除
         oldDeps.delete(this)
         return this._value
     }
