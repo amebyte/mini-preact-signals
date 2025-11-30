@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Preact Signals</title>
+</head>
+<body>
+   <script>
+let currentSignal;
+let activating = false;
+// 将需要更新的任务集中存储起来
+const pending = new Set()
+let oldDeps = new Set()
+let batchPending = 0 // 0 表示没有批处理正在进行
+class Signal {
+    _subs = new Set()
+    _deps = new Set()
+    _pending = 0 // 更新标记计数器
+    _value
+    constructor(value) {
+        this._value = value
+    }
+
+    get value() {
+        if (!currentSignal || activating) {
+            this._updater()
+        }
+        // 依赖收集
+        this._subs.add(currentSignal)
+        currentSignal._deps.add(this)
+        oldDeps.delete(this)
+        return this._value
+    }
+
+    set value(value) {
+        if (this._value !== value) {
+            this._value = value
+            // 将需要更新的任务收集起来，等待最后再一起执行
+            pending.add(this)
+            // 只有当_pending为0时，才会标记订阅者，也就是标记过了，就不需要再标记，因为知道需要更新了
+            if (this._pending === 0) {
+				mark(this);
+			}
+            // 如果不是批量处理的时候，就马上触发副作用依赖执行
+            if (batchPending === 0) {
+                sweep(pending)
+                pending.clear()
+            }
+        }
+    }
+
+    _updater() {
+        
+    }
+}
+
+// 递归地标记它的所有订阅者（即依赖此信号的其他信号）
+function mark(signal) {
+    // 注意，这里使用的是后自增，所以条件判断时是0，然后变成1
+	if (signal._pending++ === 0) {
+        // 递归地标记
+		signal._subs.forEach(mark);
+	}
+}
+
+function sweep(subs) {
+    subs.forEach(signal => {
+        // _pending > 0 意味着信号已经被标记过了，需要更新
+        if (signal._pending > 0) {
+            // 这里是重点，不管被标记了多次，都通过递减_pending直到0才执行更新
+            if (--signal._pending === 0) {
+                signal._updater()
+                sweep(signal._subs)
+            }
+        }
+    })
+}
+// 取消两个信号之间的订阅关系，并递归清理不再被订阅的信号
+function unsubscribe(signal, from) {
+    // 1. 双向删除依赖关系
+    // 从信号的依赖列表中删除对方，并从对方的订阅列表中删除自己
+	signal._deps.delete(from)
+	from._subs.delete(signal)
+    // 2.递归清理
+    // 如果被取消订阅的信号（`from`）已经没有其他订阅者（`_subs.size === 0`），那么它也不再需要依赖其他信号，因此递归地取消它对其依赖的订阅
+	if (from._subs.size === 0) {
+		from._deps.forEach(dep => unsubscribe(from, dep))
+	}
+}
+
+function signal(value) {
+    return new Signal(value)
+}
+
+function computed(compute) {
+    const signal = new Signal(undefined)
+    function updater() {
+        const tmp = currentSignal
+        currentSignal = signal
+        let prevOldDeps = oldDeps
+        // 设置为当前信号的旧依赖集合（即上一次计算时依赖的信号）
+        oldDeps = signal._deps
+        // 重置为一个新的空集合，以便在本次计算中重新收集依赖
+        signal._deps = new Set()
+        const ret = compute()
+        signal._value = ret
+        oldDeps.forEach(sub => unsubscribe(this, sub))
+        oldDeps.clear()
+        oldDeps = prevOldDeps
+        currentSignal = tmp
+    }
+    signal._updater = updater
+    return signal
+}
+
+function effect(callback) {
+    // 使用 batch 批量处理callback内部的多个信号更新
+    const s = computed(() => batch(callback))
+    activating = true
+    s._updater()
+    activating = false
+}
+
+function batch(cb) {
+    batchPending++;  // 进入批处理，增加计数器
+    // 防止用户代码报错，使用 try 语法
+    try {
+        cb()
+    } finally {
+        if (--batchPending === 0) {  // 退出最外层批处理
+            sweep(pending)
+            pending.clear() // 最后要清除所有的依赖
+        }
+    }
+}
+
+const a = signal("a")
+const b = signal("b")
+const condition = signal(true)
+const dynamic = computed(() => {
+   return condition.value ? a.value : b.value
+});
+effect(() => {
+   console.log('dynamic', dynamic.value)
+})
+a.value = 'aa'
+condition.value = false
+a.value = 'bb'
+   </script> 
+</body>
+</html>
