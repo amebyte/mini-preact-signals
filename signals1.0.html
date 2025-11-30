@@ -230,16 +230,16 @@ function refreshStale(signal) {
 		throw err;
 	}
 
-	signal._subs.forEach(sub => {
-		if (sub._pending > 0) {
-			// If PENDING > 1 then we can safely reduce the counter because
-			// the final sweep will take care of the rest. But if it's
-			// exactly 1 we can't do that otherwise the sweeping logic
-			// assumes that this signal was already updated.
-			if (sub._pending > 1) sub._pending--;
-			tmpPending.push(sub);
-		}
-	});
+	// signal._subs.forEach(sub => {
+	// 	if (sub._pending > 0) {
+	// 		// If PENDING > 1 then we can safely reduce the counter because
+	// 		// the final sweep will take care of the rest. But if it's
+	// 		// exactly 1 we can't do that otherwise the sweeping logic
+	// 		// assumes that this signal was already updated.
+	// 		if (sub._pending > 1) sub._pending--;
+	// 		tmpPending.push(sub);
+	// 	}
+	// });
 }
 
 function activate(signal) {
@@ -286,7 +286,7 @@ function effect(callback) {
 	const s = computed(() => batch(callback));
 	// Set up subscriptions since this is a "reactor" signal
 	activate(s);
-	return () => s._setCurrent()(true, true);
+	// return () => s._setCurrent()(true, true);
 }
 
 function batch(cb){
@@ -308,20 +308,39 @@ function batch(cb){
 	}
 }
 
-const a = signal('a')
-const b = signal('b')
+const a = signal("a")
+const b = signal("b")
+const cond = signal(true)
+
 const c = computed(() => {
-    return a.value + b.value
-})
+	return cond.value ? a.value : b.value
+});
+
 effect(() => {
-    console.log('signals', c.value)
-	a.value = 'aa'
-    b.value = 'bb'
+	console.log('c', c.value)
 })
-// batch(() => {
-    a.value = 'aa'
-    b.value = 'bb'
-// })
+
+// console.log('c', c.value)
+a.value = 'bb'
+cond.value = false
+// console.log('c', c.value)
+a.value = 'cc'
+
+// const a = signal("a")
+// const b = signal("b")
+// const condition = signal(true)
+
+// const dynamic = computed(() => {
+// 	return condition.value ? a.value : b.value
+// });
+
+// console.log('dynamic', dynamic.value)
+// b.value = 'bb'
+// console.log('dynamic', dynamic.value)
+// condition.value = false
+// console.log('dynamic', dynamic.value)
+// a.value = 'aa'
+// console.log('dynamic', dynamic.value)
 </script>  
 </body>
 </html>
