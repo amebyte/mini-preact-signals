@@ -61,7 +61,7 @@ function endBatch() {
 	}
 }
 
-export function batch(callback){
+function batch(callback){
 	if (batchDepth > 0) {
 		return callback();
 	}
@@ -100,7 +100,7 @@ function getValue(signal) {
 	return value;
 }
 
-export class Signal {
+class Signal {
 	/** @internal */
 	_value;
 
@@ -172,7 +172,7 @@ export class Signal {
 	}
 }
 
-export function signal(value) {
+function signal(value) {
 	return new Signal(value);
 }
 
@@ -185,7 +185,7 @@ function returnComputed(computed) {
 	return computed._value;
 }
 
-export class Computed extends Signal{
+class Computed extends Signal{
 	_compute;
 	_sources = undefined;;
 	_computing = false;
@@ -290,7 +290,7 @@ export class Computed extends Signal{
 	}
 }
 
-export function computed(compute) {
+function computed(compute) {
 	return new Computed(compute);
 }
 
@@ -334,13 +334,13 @@ class Effect {
 	}
 }
 
-export function effect(callback) {
+function effect(callback) {
 	const effect = new Effect(callback);
 	effect._run();
 	return effect._dispose.bind(effect);
 }
 
-export function _doNotUseOrYouWillBeFired_notify(signal, callback) {
+function _doNotUseOrYouWillBeFired_notify(signal, callback) {
 	const cb = () => callback(signal);
 	const notify = new Effect(cb);
 	const node = { signal: signal, target: notify, version: 0 };
