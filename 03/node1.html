@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Preact Signal</title>
+</head>
+<body>
+<script>
+// 指向当前正在运行的 Effect
+let currentTarget = undefined
+class Signal {
+    _value
+    _targets = undefined // 记录依赖了那些 effect
+    constructor(value) {
+        this._value = value
+    }
+
+    get value() {
+        // todo 依赖收集
+        return this._value
+    }
+
+    set value(value) {
+        if (this._value !== value) {
+            this._value = value
+            // todo 触发依赖
+        }
+    }
+}
+
+function signal(value) {
+    return new Signal(value)
+}
+
+class Effect {
+    _sources = undefined // 记录订阅了哪些 signal
+    _callback
+    constructor(_callback) {
+        this._callback = _callback
+    }
+
+    _run() {
+        // 保存上一个 currentTarget
+		const prevContext = currentTarget;
+		try {
+            // 设置当前正在运行的 Effect
+			currentTarget = this;
+            // 执行回调，期间会读取 Signal
+			this._callback();
+		} finally {
+            // 恢复上一个 currentTarget
+			currentTarget = prevContext;
+		}
+	}
+}
+
+function effect(callback) {
+    const effect = new Effect(callback);
+	effect._run();
+    return effect
+}
+</script> 
+</body>
+</html>
