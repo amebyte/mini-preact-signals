@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document</title>
+</head>
+<body>
+<script>
+// 指向当前正在运行的 Effect
+let currentTarget = undefined
+// 将 effect 新收集的依赖全部订阅到对应的 signal
+function addTargetToAllSources(target) {
+	for (let node = target._sources; node; node = node.nextSignal) {
+		node.signal._subscribe(node);
+	}
+}
+// 清理函数，将 effect 旧收集的依赖全部取消订阅
+function removeTargetFromAllSources(target) {
+	for (let node = target._sources; node; node = node.nextSignal) {
+		node.signal._unsubscribe(node);
+	}
+}
+
+class Signal {
+    _value
+    _targets = undefined // 记录依赖了那些 effect
+    constructor(value) {
+        this._value = value
+    }
+
+    // 添加节点，将节点（effect）添加到信号的_targets链表中，从链表的角度就是添加头节点
+    _subscribe(node) {
+        // 如果头节点存在
+        if (this._targets) {
+            // 将前一个节点 (effect) 的 prevTarget链接到最新的头节点
+            this._targets.prevTarget = node
+        }
+        // 将最新的节点 (effect) 的 nextTarget 链接上一个节点（effect）
+        node.nextTarget = this._targets
+        // 头节点没有上一个节点
+        node.prevTarget = undefined
+        // 添加到头节点
+        this._targets = node
+    }
+
+    // 删除节点，将节点（effect）从信号的_targets链表中删除，从链表的角度就是删除节点
+    _unsubscribe(node) {
+		const prev = node.prevTarget
+		const next = node.nextTarget
+        // 断开当前节点的前后连接
+		node.prevTarget = undefined
+		node.nextTarget = undefined
+
+		if (prev) {
+			prev.nextTarget = next // 前一个节点指向下一个节点
+		}
+		if (next) {
+			next.prevTarget = prev // 下一个节点指向前一个节点
+		}
+
+        // 如果当前节点是 signal 链表的头节点
+		if (node === this._targets) {
+			this._targets = next // 更新头节点为下一个节点
+		}
+	}
+
+    get value() {
+        let node = undefined
+        // todo 依赖收集
+        if (currentTarget !== void 0) {
+            // 创建节点
+            node = { signal: this, target: currentTarget, nextSignal: undefined }
+            // 将当前正在运行的 effect 的 _sources 链接到最新的节点的 nextSignal
+            node.nextSignal = currentTarget._sources
+            // 将最新的节点链接到当前正在运行的 effect 的 _sources
+            currentTarget._sources = node
+        }
+        return this._value
+    }
+
+    set value(value) {
+        if (this._value !== value) {
+            this._value = value
+            // todo 触发依赖
+            for(let node = this._targets; node; node = node.nextTarget) {
+                node.target && node.target._run()
+            }
+        }
+    }
+}
+
+function signal(value) {
+    return new Signal(value)
+}
+
+class Effect {
+    _sources = undefined // 记录订阅了哪些 signal
+    _callback
+    constructor(_callback) {
+        this._callback = _callback
+    }
+
+    _run() {
+        // 保存上一个 currentTarget
+		const prevContext = currentTarget
+		try {
+            // 设置当前正在运行的 Effect
+			currentTarget = this
+            // 1. 移除所有旧的订阅
+            removeTargetFromAllSources(this)
+            // 清空sources链表，因为接下来会重新收集
+            this._sources = undefined
+            // 2. 执行回调，重新收集依赖
+			this._callback();
+		} finally {
+            // 3. 先收集所有依赖，再一次性建立订阅
+            addTargetToAllSources(this)
+            // 恢复上一个 currentTarget
+			currentTarget = prevContext;
+		}
+	}
+    // 删除依赖
+    _dispose() {
+        // 遍历当前 effect 依赖的所有 signal 节点
+        for (let node = this._sources; node; node = node.nextSignal) {
+            node.signal._unsubscribe(node)
+        }
+        
+        // 清空 effect 的 sources 链表
+        this._sources = undefined;
+    }
+}
+
+function effect(callback) {
+    const effect = new Effect(callback);
+	effect._run();
+    return effect
+}
+
+const a = signal('a')
+const b = signal('b')
+const condition = signal(true)
+effect(() => {
+   console.log('dynamic', condition.value ? a.value : b.value)
+})
+a.value = 'aa'
+condition.value = false
+b.value = 'bb'
+// a.value = 'aaa'    
+</script>    
+</body>
+</html>
