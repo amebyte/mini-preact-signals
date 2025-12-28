@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Preact Signals</title>
+</head>
+<body>
+   <script>
+// 批处理嵌套深度计数器
+let batchDepth = 0
+let globalVersion = 0
+
+class Signal {
+
+    set value(value) {
+        if (this._value !== value) {
+            this._value = value
+            // 值改变时版本递增
+			this._version++
+            globalVersion++          
+
+        }
+    }
+}
+
+class Computed extends Signal {
+    _globalVersion = globalVersion - 1
+
+    peek() {
+        if (this._globalVersion === globalVersion) {
+            this._globalVersion = globalVersion
+            return this._value
+		}
+        // 如果是有效缓存，直接返回 
+        if (this._valid) {
+            this._globalVersion = globalVersion
+            return this._value
+        }
+        // 初始化不检查，至少计算过一次
+        if (this._version > 0) {
+
+            // 如果所有依赖版本都没变
+			if (!node) {
+                this._globalVersion = globalVersion
+                // 直接返回缓存值，避免重新计算
+				return this._value
+			}
+		}
+  
+        // 标记为有效缓存
+        this._valid = true
+        this._globalVersion = globalVersion
+        return value
+    }
+
+    // 核心 value getter
+    get value() {
+        return getValue(this)
+    }
+}
+
+const A = signal(1);
+const B = signal(2);
+// sum 依赖 A 和 B
+const sum = computed(() => {
+    console.log('计算sum')
+    return A.value + B.value
+});  
+// doubled 依赖 sum
+const doubled = computed(() => {
+    console.log('计算doubled')
+    return sum.value * 2
+});  
+// 订阅 doubled
+effect(() => {
+  console.log(`打印 Doubled: ${doubled.value}`);
+});
+batch(() => {
+    A.value = 2
+    A.value = 1
+})
+   </script> 
+</body>
+</html>

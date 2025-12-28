@@ -15,7 +15,6 @@ let currentRollback = undefined
 let currentBatch = undefined
 // 批处理嵌套深度计数器
 let batchDepth = 0
-let globalVersion = 0
 // 将 effect 新收集的依赖全部订阅到对应的 signal
 function addTargetToAllSources(target) {
 	for (let node = target._sources; node; node = node.nextSignal) {
@@ -164,8 +163,7 @@ class Signal {
         if (this._value !== value) {
             this._value = value
             // 值改变时版本递增
-			this._version++
-            globalVersion++          
+			this._version++          
             // 开始批处理
             startBatch()
             for(let node = this._targets; node; node = node.nextTarget) {
@@ -186,7 +184,6 @@ function signal(value) {
 class Computed extends Signal {
     _compute
     _valid = false // 脏标记
-    _globalVersion = globalVersion - 1
     _sources = undefined // 记录订阅了哪些 signal
 	constructor(compute) {
 		super(undefined) // 调用父类 Signal 的构造函数，初始值为 undefined，因为计算信号的值需要计算得到
@@ -203,13 +200,8 @@ class Computed extends Signal {
 	}
 
     peek() {
-        if (this._globalVersion === globalVersion) {
-            this._globalVersion = globalVersion
-            return this._value
-		}
         // 如果是有效缓存，直接返回 
         if (this._valid) {
-            this._globalVersion = globalVersion
             return this._value
         }
         // 初始化不检查，至少计算过一次
@@ -231,7 +223,6 @@ class Computed extends Signal {
 			}
             // 如果所有依赖版本都没变
 			if (!node) {
-                this._globalVersion = globalVersion
                 // 直接返回缓存值，避免重新计算
 				return this._value
 			}
@@ -271,7 +262,6 @@ class Computed extends Signal {
         }   
         // 标记为有效缓存
         this._valid = true
-        this._globalVersion = globalVersion
         return value
     }
 
