@@ -9,6 +9,7 @@
    <script>
 // 批处理嵌套深度计数器
 let batchDepth = 0
+// 全局的“脏”标记
 let globalVersion = 0
 
 class Signal {
@@ -18,6 +19,7 @@ class Signal {
             this._value = value
             // 值改变时版本递增
 			this._version++
+            // 值改变时全局版本也递增
             globalVersion++          
 
         }
@@ -25,15 +27,19 @@ class Signal {
 }
 
 class Computed extends Signal {
+    // 强制首次计算：确保新创建的 computed 第一次读取时一定会执行计算函数
     _globalVersion = globalVersion - 1
 
     peek() {
+        // 说明自上次计算以来，没有任何一个信号发生过变化
         if (this._globalVersion === globalVersion) {
+            // 同时更新计算信号的全句版本
             this._globalVersion = globalVersion
             return this._value
 		}
         // 如果是有效缓存，直接返回 
         if (this._valid) {
+            // 同时更新计算信号的全句版本
             this._globalVersion = globalVersion
             return this._value
         }
@@ -42,6 +48,7 @@ class Computed extends Signal {
 
             // 如果所有依赖版本都没变
 			if (!node) {
+                // 同时更新计算信号的全句版本
                 this._globalVersion = globalVersion
                 // 直接返回缓存值，避免重新计算
 				return this._value
@@ -50,6 +57,7 @@ class Computed extends Signal {
   
         // 标记为有效缓存
         this._valid = true
+        // 同时更新计算信号的全句版本
         this._globalVersion = globalVersion
         return value
     }
