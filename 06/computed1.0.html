@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Preact Signals</title>
+</head>
+<body>
+   <script>
+// 指向当前正在运行的 Effect
+let evalContext = undefined
+// 全局回滚栈指针，指向当前正在构建的回滚链表的头部 
+let currentRollback = undefined
+// 指向当前批处理链表的头部（先进先出队列）
+let currentBatch = undefined
+// 批处理嵌套深度计数器
+let batchDepth = 0
+// 全局的“脏”标记
+let globalVersion = 0
+// 将 effect 新收集的依赖全部订阅到对应的 signal
+function subscribeToAll(sources) {
+	for (let node = sources; node; node = node.nextSignal) {
+		node.signal._subscribe(node);
+	}
+}
+// 清理函数，将 effect 旧收集的依赖全部取消订阅
+function unsubscribeFromAll(sources) {
+	for (let node = sources; node; node = node.nextSignal) {
+		node.signal._unsubscribe(node);
+	}
+}
+// 回滚函数：将 Signal 的 _evalContext 恢复为之前的值
+function rollback(item) {
+    // 遍历回滚链表（从最新到最旧）
+	for (let rollback = item; rollback; rollback = rollback.next) {
+        // 将每个 Signal 的 _evalContext 恢复为收集依赖前的值
+		rollback.signal._evalContext = rollback.evalContext;
+	}
+}
+// 开始批处理
+function startBatch() {
+    // 增加批处理深度
+	batchDepth++
+}
+// 结束批量处理，执行批处理队列
+function endBatch() {
+    // 只有最外层批处理结束才执行
+	if (--batchDepth === 0) {
+		const batch = currentBatch
+		currentBatch = undefined
+        // 遍历批处理队列
+		for (let item = batch; item; item = item.next) {
+			const runnable = item.effect
+            // 重置批处理标志
+			runnable._batched = false
+            // 执行 Effect
+			runnable._run()
+		}
+	}
+}
+// 批处理
+function batch(callback){
+    // 1. 检查是否已经在批处理中
+	if (batchDepth > 0) {
+        // 直接执行，不开启新批处理
+		return callback();
+	}
+    // 2. 开始批处理
+	startBatch();
+	try {
+        // 3. 执行用户回调
+		return callback();
+	} finally {
+        // 4. 无论回调执行成功还是失败，都结束批处理
+		endBatch();
+	}
+}
+
+function getValue(signal) {
+    let node = void 0
+    // 如果当前有正在收集依赖的目标，并且这个信号还没有被当前目标收集过
+    if (evalContext !== void 0 && signal._evalContext !== evalContext) {
+        // 创建节点
+        node = { 
+            signal: signal,           // 依赖的信号
+            target: evalContext,    // 依赖者（哪个computed/effect）
+            nextSignal: undefined,    // 链表下一项
+            version: 0                // 链表节点版本号
+        }
+        // 创建回滚节点
+        currentRollback = { 
+            signal: signal,                       // 当前被访问的 Signal
+            evalContext: signal._evalContext, // Signal 原有的 _evalContext 值（可能为空）
+            next: currentRollback               // 将新节点插入回滚链表头部
+        }
+        // 标记这个信号已经被当前目标收集了
+        signal._evalContext = evalContext
+    }
+    const value = signal.peek()
+    if (evalContext && node) {
+        // 将当前正在运行的 effect 的 _sources 链接到最新的节点的 nextSignal
+        node.nextSignal = evalContext._sources
+        // 记录下此刻信号的版本号到链表节点上
+        node.version = node.signal._version
+        // 将最新的节点链接到当前正在运行的 effect 的 _sources
+        evalContext._sources = node
+    }
+    return value
+}
+
+class Signal {
+    _value
+    _version = 0 // 信号的版本号
+    _evalContext = undefined // 当前正在访问该信号的目标（计算信号或效果），用于防止重复收集依赖
+    _targets = undefined // 记录依赖了那些 effect
+    constructor(value) {
+        this._value = value
+    }
+
+    // 添加节点，将节点（effect）添加到信号的_targets链表中，从链表的角度就是添加头节点
+    _subscribe(node) {
+        // 如果头节点存在
+        if (this._targets) {
+            // 将前一个节点 (effect) 的 prevTarget链接到最新的头节点
+            this._targets.prevTarget = node
+        }
+        // 将最新的节点 (effect) 的 nextTarget 链接上一个节点（effect）
+        node.nextTarget = this._targets
+        // 头节点没有上一个节点
+        node.prevTarget = undefined
+        // 添加到头节点
+        this._targets = node
+    }
+
+    // 删除节点，将节点（effect）从信号的_targets链表中删除，从链表的角度就是删除节点
+    _unsubscribe(node) {
+		const prev = node.prevTarget
+		const next = node.nextTarget
+        // 清理节点引用，手动释放内存
+		node.prevTarget = undefined
+		node.nextTarget = undefined
+
+		if (prev) {
+			prev.nextTarget = next // 前一个节点指向下一个节点
+		}
+		if (next) {
+			next.prevTarget = prev // 下一个节点指向前一个节点
+		}
+
+        // 如果当前节点是 signal 链表的头节点
+		if (node === this._targets) {
+			this._targets = next // 更新头节点为下一个节点
+		}
+	}
+
+    peek() {
+        return this._value
+    }
+
+    get value() {
+        return getValue(this)
+    }
+
+    set value(value) {
+        if (this._value !== value) {
+            this._value = value
+            // 值改变时版本递增
+			this._version++
+            // 值改变时全局版本也递增
+            globalVersion++          
+            // 开始批处理
+            startBatch()
+            for(let node = this._targets; node; node = node.nextTarget) {
+                // node.target && node.target._run()
+                // 将 Effect 加入批处理队列
+                node.target && node.target._invalidate()
+            }
+            // 结束批处理，执行更新
+            endBatch()
+        }
+    }
+}
+
+function signal(value) {
+    return new Signal(value)
+}
+
+class Computed extends Signal {
+    _compute
+    _valid = false // 脏标记
+    _sources = undefined // 记录订阅了哪些 signal
+    // 强制首次计算：确保新创建的 computed 第一次读取时一定会执行计算函数
+    _globalVersion = globalVersion - 1
+	constructor(compute) {
+		super(undefined) // 调用父类 Signal 的构造函数，初始值为 undefined，因为计算信号的值需要计算得到
+		this._compute = compute // 存储计算函数
+	}
+
+    // 触发更新
+    _invalidate() {
+        // 有依赖变化了，标记为无效缓存
+        this._valid = false
+		for (let node = this._targets; node; node = node.nextTarget) {
+			node.target._invalidate()
+		}
+	}
+
+    peek() {
+        // 说明自上次计算以来，没有任何一个信号发生过变化
+        if (this._globalVersion === globalVersion) {
+            // 同时更新计算信号的全句版本
+            this._globalVersion = globalVersion
+            return this._value
+        }
+        // 如果是有效缓存，直接返回 
+        if (this._valid) {
+            // 同时更新计算信号的全句版本
+            this._globalVersion = globalVersion
+            return this._value
+        }
+        // 初始化不检查，至少计算过一次
+        if (this._version > 0) {
+            // 获取依赖链表
+			let node = this._sources
+            // 遍历所有依赖，检查版本
+			while (node) {
+                // 确保依赖的信号已经更新到最新
+				node.signal.peek()
+                // 比较当前版本和记录的版本
+				if (node.signal._version !== node.version) {
+                    // 发现版本变化，停止检查
+					break
+				}
+                // 检查下一个依赖
+				node = node.nextSignal
+			}
+            // 如果所有依赖版本都没变
+			if (!node) {
+                // 同时更新计算信号的全句版本
+                this._globalVersion = globalVersion
+                // 直接返回缓存值，避免重新计算
+				return this._value
+			}
+		}
+
+        let value = undefined
+        const oldSources = this._sources
+        // 保存上一个 evalContext
+		const prevContext = evalContext
+        // 保存上一个回滚栈（全局变量）
+        const prevRollback = currentRollback
+        try {
+            // 设置当前正在运行的 Effect
+			evalContext = this
+            // 重置回滚栈（每个 Effect 执行开始时清空自己的回滚栈）
+            currentRollback = undefined
+            // 1. 移除所有旧的订阅
+            // removeTargetFromAllSources(this)
+            // 清空sources链表，因为接下来会重新收集
+            this._sources = undefined    
+            // 执行计算函数，获取新值
+            value = this._compute()
+        } finally {
+            // 3. 先收集所有依赖，再一次性建立订阅
+            subscribeToAll(this._sources)
+            // 移除所有旧的订阅
+            unsubscribeFromAll(oldSources)
+            // 4. 执行回滚：将所有 Signal 的 _evalContext 恢复为 Effect 执行前的值
+            // 这是为了支持嵌套 Effect 的执行
+            rollback(currentRollback)
+            // 5. 恢复全局上下文
+			evalContext = prevContext // 恢复上一个 evalContext
+            currentRollback = prevRollback // 恢复之前的回滚栈
+        }
+        // 如果值发生变化，更新缓存
+        if (this._value !== value) {
+            this._value = value
+            // 同样在值改变时需要递增
+            this._version++
+        }   
+        // 同时更新计算信号的全句版本
+        this._globalVersion = globalVersion
+        // 标记为有效缓存
+        this._valid = true
+        return value
+    }
+
+    // 核心 value getter
+    get value() {
+        return getValue(this)
+    }
+}
+
+function computed(compute) {
+	return new Computed(compute);
+}
+
+class Effect {
+    _sources = undefined // 记录订阅了哪些 signal
+    _batched = false // Effect 是否已被加入批处理队列的标志
+    _callback
+    constructor(_callback) {
+        this._callback = _callback
+    }
+
+    _run() {
+        const oldSources = this._sources
+        // 保存上一个 evalContext
+		const prevContext = evalContext
+        // 保存上一个回滚栈（全局变量）
+        const prevRollback = currentRollback
+		try {
+            // 设置当前正在运行的 Effect
+			evalContext = this
+            // 重置回滚栈（每个 Effect 执行开始时清空自己的回滚栈）
+            currentRollback = undefined
+            // 1. 移除所有旧的订阅
+            // removeTargetFromAllSources(this)
+            // 清空sources链表，因为接下来会重新收集
+            this._sources = undefined
+            // 2. 执行回调，重新收集依赖
+			this._callback();
+		} finally {
+            // 3. 先收集所有依赖，再一次性建立订阅
+            subscribeToAll(this._sources)
+            unsubscribeFromAll(oldSources)
+            // 4. 执行回滚：将所有 Signal 的 _evalContext 恢复为 Effect 执行前的值
+            // 这是为了支持嵌套 Effect 的执行
+            rollback(currentRollback)
+            // 5. 恢复全局上下文
+			evalContext = prevContext // 恢复上一个 evalContext
+            currentRollback = prevRollback // 恢复之前的回滚栈
+		}
+	}
+    // 将 Effect 加入批处理队列
+    _invalidate() {
+		if (!this._batched) {
+            // 标记 Effect 为已批处理（防止重复添加）
+			this._batched = true
+            // 将 Effect 添加到批处理链表的头部（LIFO，后进先出）
+			currentBatch = { effect: this, next: currentBatch }
+		}
+	}
+
+    // 删除依赖
+    _dispose() {
+        // 遍历当前 effect 依赖的所有 signal 节点
+        for (let node = this._sources; node; node = node.nextSignal) {
+            node.signal._unsubscribe(node)
+        }
+        
+        // 清空 effect 的 sources 链表
+        this._sources = undefined;
+    }
+}
+
+function effect(callback) {
+    const effect = new Effect(callback);
+	effect._run();
+    return effect
+}
+
+const A = signal(1);
+const B = signal(2);
+// sum 依赖 A 和 B
+const sum = computed(() => {
+    console.log('计算sum')
+    return A.value + B.value
+});  
+// doubled 依赖 sum
+const doubled = computed(() => {
+    console.log('计算doubled')
+    return sum.value * 2
+});  
+// 订阅 doubled
+effect(() => {
+  console.log(`打印 Doubled: ${doubled.value}`);
+});
+batch(() => {
+    A.value = 2
+    A.value = 1
+})
+   </script> 
+</body>
+</html>
