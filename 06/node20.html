@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Preact Signals</title>
+</head>
+<body>
+ <script>
+function subscribeToAll(sources) {
+	for (let node = sources; node; node = node.nextSignal) {
+		node.signal._subscribe(node);
+	}
+}
+
+function unsubscribeFromAll(sources) {
+	for (let node = sources; node; node = node.nextSignal) {
+		node.signal._unsubscribe(node);
+	}
+}
+
+function rollback(item) {
+	for (let rollback = item; rollback; rollback = rollback.next) {
+		rollback.signal._evalContext = rollback.evalContext;
+	}
+}
+
+function startBatch() {
+	batchDepth++;
+}
+
+function endBatch() {
+	if (--batchDepth === 0) {
+		const batch = currentBatch;
+		currentBatch = undefined;
+
+		for (let item = batch; item; item = item.next) {
+			const runnable = item.effect;
+			runnable._batched = false;
+			runnable._notify();
+		}
+	}
+}
+
+function batch(callback) {
+	if (batchDepth > 0) {
+		return callback();
+	}
+	/*@__INLINE__**/ startBatch();
+	try {
+		return callback();
+	} finally {
+		endBatch();
+	}
+}
+
+// A list for rolling back source's ._evalContext values after a target has been evaluated.
+let currentRollback = undefined;
+// Currently evaluated computed or effect.
+let evalContext = undefined;
+// Effects collected into a batch.
+let currentBatch = undefined;
+let batchDepth = 0;
+// A global version number for signalss, used for fast-pathing repeated
+// computed.peek()/computed.value calls when nothing has changed globally.
+let globalVersion = 0;
+
+function getValue(signal) {
+	let node = undefined;
+	if (evalContext !== undefined && signal._evalContext !== evalContext) {
+		node = { signal: signal, target: evalContext, version: 0 };
+		currentRollback = {
+			signal: signal,
+			evalContext: signal._evalContext,
+			next: currentRollback,
+		};
+		signal._evalContext = evalContext;
+	}
+	const value = signal.peek();
+	if (evalContext && node) {
+		node.nextSignal = evalContext._sources;
+		node.version = node.signal._version;
+		evalContext._sources = node;
+	}
+	return value;
+}
+
+class Signal {
+	/** @internal */
+	_value;
+
+	/** @internal */
+	_version = 0;
+
+	/** @internal */
+	_evalContext = undefined;
+
+	/** @internal */
+	_targets = undefined;
+
+	constructor(value) {
+		this._value = value;
+	}
+
+	/** @internal */
+	_subscribe(node) {
+		if (this._targets) {
+			this._targets.prevTarget = node;
+		}
+		node.nextTarget = this._targets;
+		node.prevTarget = undefined;
+		this._targets = node;
+	}
+
+	/** @internal */
+	_unsubscribe(node) {
+		const prev = node.prevTarget;
+		const next = node.nextTarget;
+		node.prevTarget = undefined;
+		node.nextTarget = undefined;
+
+		if (prev) {
+			prev.nextTarget = next;
+		}
+		if (next) {
+			next.prevTarget = prev;
+		}
+		if (node === this._targets) {
+			this._targets = next;
+		}
+	}
+
+	subscribe(fn) {
+		return effect(() => fn(this.value));
+	}
+
+	toString() {
+		return "" + this.value;
+	}
+
+	peek() {
+		return this._value;
+	}
+
+	get value() {
+		return getValue(this);
+	}
+
+	set value(value) {
+		if (value !== this._value) {
+			this._value = value;
+			this._version++;
+			globalVersion++;
+
+			/**@__INLINE__*/ startBatch();
+			for (let node = this._targets; node; node = node.nextTarget) {
+				node.target._invalidate();
+			}
+			endBatch();
+		}
+	}
+}
+
+function signal(value) {
+	return new Signal(value);
+}
+
+function returnComputed(computed) {
+	computed._valid = true;
+	computed._globalVersion = globalVersion;
+	if (computed._valueIsError) {
+		throw computed._value;
+	}
+	return computed._value;
+}
+
+class Computed extends Signal {
+	_compute;
+	_sources = undefined;
+	_computing = false;
+	_valid = false;
+	_valueIsError = false;
+	_globalVersion = globalVersion - 1;
+
+	constructor(compute) {
+		super(undefined);
+		this._compute = compute;
+	}
+
+	_subscribe(node) {
+		if (!this._targets) {
+			// A computed signal subscribes lazily to its dependencies when
+			// the computed signal gets its first subscriber.
+			this._valid = false;
+			subscribeToAll(this._sources);
+		}
+
+		super._subscribe(node);
+	}
+
+	_unsubscribe(node) {
+		super._unsubscribe(node);
+
+		// When a computed signal loses its last subscriber it also unsubscribes
+		// from its own dependencies.
+		if (!this._targets) {
+			unsubscribeFromAll(this._sources);
+		}
+	}
+
+	_invalidate() {
+		this._valid = false;
+		for (let node = this._targets; node; node = node.nextTarget) {
+			node.target._invalidate();
+		}
+	}
+
+	peek() {
+		if (this._computing) {
+			throw new Error("cycle detected");
+		}
+		if (this._globalVersion === globalVersion) {
+			return returnComputed(this);
+		}
+		if (this._targets && this._valid) {
+			return returnComputed(this);
+		}
+
+		if (this._version > 0) {
+			let node = this._sources;
+			while (node) {
+				node.signal.peek();
+				if (node.signal._version !== node.version) {
+					break;
+				}
+				node = node.nextSignal;
+			}
+			if (!node) {
+				return returnComputed(this);
+			}
+		}
+
+		let value = undefined;
+		let valueIsError = false;
+
+		const oldSources = this._sources;
+		const prevContext = evalContext;
+		const prevRollback = currentRollback;
+		try {
+			evalContext = this;
+			currentRollback = undefined;
+
+			this._computing = true;
+			this._sources = undefined;
+
+			value = this._compute();
+		} catch (err) {
+			valueIsError = true;
+			value = err;
+		} finally {
+			if (this._targets) {
+				subscribeToAll(this._sources);
+			}
+			unsubscribeFromAll(oldSources);
+			rollback(currentRollback);
+			this._computing = false;
+			evalContext = prevContext;
+			currentRollback = prevRollback;
+		}
+
+		if (valueIsError || this._valueIsError || this._value !== value) {
+			this._value = value;
+			this._valueIsError = valueIsError;
+			this._version++;
+		}
+		return returnComputed(this);
+	}
+
+	get value() {
+		return getValue(this);
+	}
+}
+
+function computed(compute) {
+	return new Computed(compute);
+}
+
+class Effect {
+	_notify;
+	_sources = undefined;
+	_batched = false;
+
+	constructor(notify) {
+		this._notify = notify;
+	}
+
+	_start() {
+		/*@__INLINE__**/ startBatch();
+		const oldSources = this._sources;
+		const prevContext = evalContext;
+		const prevRollback = currentRollback;
+
+		evalContext = this;
+		currentRollback = undefined;
+		this._sources = undefined;
+		return this._end.bind(this, oldSources, prevContext, prevRollback);
+	}
+
+	_end(oldSources, prevContext, prevRollback) {
+		subscribeToAll(this._sources);
+		unsubscribeFromAll(oldSources);
+		rollback(currentRollback);
+
+		evalContext = prevContext;
+		currentRollback = prevRollback;
+		endBatch();
+	}
+
+	_invalidate() {
+		if (!this._batched) {
+			this._batched = true;
+			currentBatch = { effect: this, next: currentBatch };
+		}
+	}
+
+	_dispose() {
+		for (let node = this._sources; node; node = node.nextSignal) {
+			node.signal._unsubscribe(node);
+		}
+		this._sources = undefined;
+	}
+}
+
+function effect(callback) {
+	const effect = new Effect(() => {
+		const finish = effect._start();
+		try {
+			callback.call(effect);
+		} finally {
+			finish();
+		}
+	});
+	effect._notify();
+	// Return a bound function instead of a wrapper like `() => effect._dispose()`,
+	// because bound functions seem to be just as fast and take up a lot less memory.
+	return effect._dispose.bind(effect);
+}  
+
+const A = signal(1);
+const B = signal(2);
+
+const sum = computed(() => {
+    console.log('计算sum')
+    return A.value + B.value
+});  // sum 依赖 A 和 B
+const doubled = computed(() => {
+    console.log('计算doubled')
+    return sum.value * 2
+});  // doubled 依赖 sum
+
+// 订阅 doubled
+const dispose = effect(() => {
+  console.log(`Doubled: ${doubled.value}`);
+});
+batch(() => {
+    A.value = 2
+    A.value = 1
+})
+ </script>   
+</body>
+</html>
