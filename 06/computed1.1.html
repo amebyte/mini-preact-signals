@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Preact Signals</title>
+</head>
+<body>
+   <script>
+
+let effectDepth = 0
+
+function getValue(signal) {
+    let node = void 0
+    // 如果当前有正在收集依赖的目标，并且这个信号还没有被当前目标收集过
+    if (evalContext !== void 0 && signal._evalContext !== evalContext) {
+
+        // 标记这个信号已经被当前目标收集了
+        signal._evalContext = evalContext
+        if (effectDepth > 0) {
+            signal._subscribe(node);
+        }
+    }
+    const value = signal.peek()
+    if (evalContext && node) {
+        // 将当前正在运行的 effect 的 _sources 链接到最新的节点的 nextSignal
+        node.nextSignal = evalContext._sources
+        // 将最新的节点链接到当前正在运行的 effect 的 _sources
+        evalContext._sources = node
+        // 记录下此刻信号的版本号到链表节点上
+        node.version = node.signal._version
+    }
+    return value
+}
+
+
+class Computed extends Signal {
+
+    // 触发更新
+    _invalidate() {
+        if (this._valid) {
+            // 有依赖变化了，标记为无效缓存
+            this._valid = false
+            for (let node = this._targets; node; node = node.nextTarget) {
+                node.target._invalidate()
+            }
+        }
+	}
+
+}
+
+ class Effect {
+
+	_start() {
+		
+		// 保存执行前的状态快照
+		const oldSources = this._sources;      // 旧的依赖链表
+		const prevContext = evalContext;       // 上一个执行上下文
+		const prevRollback = currentRollback;  // 上一个回滚栈
+        effectDepth++
+		
+	}
+
+	_end(oldSources, prevContext, prevRollback) {
+        effectDepth--;
+
+	}
+}
+
+
+
+const A = signal(1);
+const B = signal(2);
+// sum 依赖 A 和 B
+const sum = computed(() => {
+    console.log('计算sum')
+    return A.value + B.value
+});  
+// doubled 依赖 sum
+const doubled = computed(() => {
+    console.log('计算doubled')
+    return sum.value * 2
+});  
+// 订阅 doubled
+effect(() => {
+  console.log(`打印 Doubled: ${doubled.value}`);
+});
+batch(() => {
+    A.value = 2
+    A.value = 1
+})
+   </script> 
+</body>
+</html>
